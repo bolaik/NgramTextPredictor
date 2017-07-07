@@ -1,0 +1,70 @@
+---
+title: "N-Gram Text Prediction"
+subtitle: "with Good-Turing discount and Katz backoff"
+author: "Wei Xu"
+date: "April 1, 2017"
+output: 
+  ioslides_presentation:
+    css: shiny-slides.css
+    logo: images/psu_logo.png
+    self_contained: no
+    incremental: no
+---
+
+## Natural Language Processing 
+
+- Sentiment Analysis
+- Question Answering
+- Dialogue Angents / Response Generation
+- Machine Translation
+- <span style="color:red">Text Prection</span>
+      * Markov assumption: individual words are correlated to neighbouring words
+      * Strength of correlation is calculated with probability of N-word sentenses (N-grams)
+      * Predict new word based on the previous (N-1) input words with corresponding N-grams
+
+
+## N-Gram Model{.columns-2}
+
+```{r ngram-load, message=FALSE, echo=FALSE, results='hide'}
+library(data.table)
+unigram = fread("../../trial-ngram/unigram-wf.csv")
+trigram = fread("../../trial-ngram/trigram-wf.csv")
+```
+
+```{r ngram-table, echo=FALSE, results='asis'}
+library(pander)
+pandoc.table(head(unigram))
+pandoc.table(head(trigram))
+```
+
+## Missing N-Grams
+
+### Good-Turing discounting
+
+###### Use the count of singletons to help estimate the count of ngrams that never appeared.
+
+```{r smoothing, message=FALSE, echo=FALSE}
+unigram.fft <- read.csv(file = "../ngram/unigram-fft.csv")
+bigram.fft  <- read.csv(file = "../ngram/bigram-fft.csv" )
+trigram.fft <- read.csv(file = "../ngram/trigram-fft.csv")
+tableGT <- data.frame(freq=c(1:5), uni.discount=unigram.fft[1:5,3], bi.discount=bigram.fft[1:5,3], tri.discount=trigram.fft[1:5,3], row.names = NULL)
+tableGT
+```
+
+### Katz backoff
+
+###### Katz back-off suggests a better way of distributing the probability mass among unseen events, by relying on information of lower-order ngrams.
+
+## Shiny Application
+
+### [Shiny app](https://bolaik.shinyapps.io/n-gram_text_predictor/) online user interface
+
+- Type in phrase
+- Choose backoff method: Naive backoff vs Katz backoff
+- Probability barplot of selected words
+
+### Model performance
+
+| model | top1_precision | top3_precision | avg_runtime | tot_memory |
+| ----- | -------------- | -------------- | ----------- | ---------- |
+|Katz backoff | 10.81 % | 15.06 % | 700.91 msec | 213.76 mb |

@@ -1,0 +1,755 @@
+---
+title: 'Word Prediction: Exploratory Data Analysis'
+author: "Wei Xu"
+date: "February 10, 2017"
+output:
+  pdf_document:
+    toc: false
+fontfamily: mathpazo
+#geometry: margin=1in
+---
+
+```{r setup, include=TRUE, echo=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE)
+library(tm)
+library(filehash)
+```
+
+## Data loading and cleaning
+
+We load a sample corpus of txt documents composed of blogs, news and tweets provided by swiftykey in the data science capstone project. We used __tm__ package to manage documents, which are loaded from a function called __Corpus__. In order to save memory, __PCorpus__ (named permanent corpus) is used, which essentially creates pointers to external data base and manipulates underlying corpus. Several examples of individual entries in the corpus are shown below:
+
+```{r viewDocs, message=FALSE, echo=FALSE}
+# define custom view of documents in the corpus
+viewDocs <- function(doc, entry, lines) 
+      {txt <- as.character(doc[[entry]])[lines]; writeLines(strwrap(txt))}
+```
+
+```{r load corpus, message=FALSE}
+library(tm)
+library(filehash)
+fname <- "../../final/en_US/"
+# load English txt from blogs, news and twitters
+docs <- PCorpus(DirSource(fname, encoding="UTF-8", mode="text"), 
+                readerControl=list(language="en"),
+                dbControl = list(dbName = "docs_origin.db", dbType = "DB1"))
+viewDocs(docs, 2, 5) # news example
+```
+
+Given the messy nature of language documents, especially txt data from blogs and twitters, it is important to first clean the original txt data in order to produce programmable dataset. First of all, __non-ASCII symbols__, which appear most frequently in twitter posts, should be removed from the original corpus.
+
+```{r remove nonascii-word, echo=FALSE, message=FALSE, eval=FALSE}
+# remove non-ascii characters or words in the corpus
+# this piece of code removes the whole word containing non-ascii codes
+## this code is imcomplete and should not be used
+wordlist <- unlist(strsplit(as.String(docs[[3]]$content), split = " "))
+ind.nonascii <- grepl("wordlist", iconv(wordlist, "latin1", "ASCII", sub = "wordlist"))
+wordlist.ascii <- wordlist[!(ind.nonascii)]
+twitxt <- paste(wordlist.ascii, collapse = " ")
+twitxt <- VCorpus(VectorSource(twitxt))
+viewDocs(twitxt, 1, 10)
+```
+
+```{r remove nonascii-symbol, echo=FALSE, message=FALSE, eval=FALSE}
+# remove non-ascii characters or words
+toEmpty <- content_transformer(function(x) iconv(x, "latin1", "ASCII", sub=""))
+docs <- tm_map(docs, toEmpty); dbInit("docs_origin.db")
+```
+
+Considering the spirit of word prediction, the words themselves are more important than their corresponding cases. Thus we conclude that our model is not case-sensitive and we generally transfer all words to their __low cases__. __Numbers__ although appear so frequently in communications, are not within our interest simply due to their unpredictability. Whether or not to include __punctuations__ as words in natural language processing is an under-debated question. Since punctuation is critical for finding boundaries and sentiments (comma, colon, period, question and exclamation marks), these punctuation symbols are treated as the same way as individual words. The apostrophe as a special punctuation, is often used to create progressive forms, contractions and plurals. In these cases, i.e. apostrophes are embedded into words, we treat the entities (apostrophe word combination) as individual words. Punctuations in other cases are considered unimportant and thus removed during the cleaning process.
+
+__Stopwords__ (words with little meaning, such as _and_, _the_, _a_, _an_), __stemmers__ (inflected words with same stem/lemma but different wordforms) and __disfluencies__ (word fragments and filled pauses, such as _uh_) are important concepts in natural language processing. We assume that all words with different wordforms, regardless of stopwords or stemmers, will be included in our model. Disfluencies, though may help in parsing (such as fillers), could be removed for a neater model. We also want to remove the __whitespace__ in the end. __Duplicated pattern__ appears quite often in twitter or blog posts. This duplication happens in both punctuations and words. Since this could be treated as a common language phenomenon, we choose to keep it in the cleared documents. Part of the unwanted words are transformed into symbols such as `<num>`, `<url>`, `<email>` and `<eos>`, and are removed after the generation of n-grams. We have a few examples of the documents after data cleaning:
+
+```{r dataclean, message=FALSE, eval=FALSE, echo=FALSE}
+# to lower case
+docs <- tm_map(docs, content_transformer(tolower)); dbInit("docs_origin.db")
+# customize toString
+toString <- content_transformer(function(x, from, to) gsub(from, to, x)) 
+docs <- tm_map(docs, toString, "<|>", ""); dbInit("docs_origin.db")
+# put any word containing numbers into '<num>' (e.g. 10, 10th, 9:30)
+docs <- tm_map(docs, toString, "[^ ]*[0-9]+[^ ]*", "<num>"); dbInit("docs_origin.db")
+# identify url
+url <- function(x) gsub(" ?(f|ht)tp(s?):[^ ]*", " <url> ", x)
+docs <- tm_map(docs, content_transformer(url)); dbInit("docs_origin.db")
+# identiy email
+email <- function(x) gsub("[^ ]+@[^ ]+\\.[^ ]+", " <email> ", x)
+docs <- tm_map(docs, content_transformer(email)); dbInit("docs_origin.db")
+
+# indepth consideration of punctuations
+# '&' and '/'
+docs <- tm_map(docs, toString, "\\&[\\&]+|\\/[\\/]+", ""); dbInit("docs_origin.db")
+docs <- tm_map(docs, toString, "\\&", " and "); dbInit("docs_origin.db")
+docs <- tm_map(docs, toString, "\\/", " or "); dbInit("docs_origin.db")
+# set unimportant punctuations into '<eos>'
+docs <- tm_map(docs, toString, "[^[:alnum:][:space:]<>',.?!:-]", " <eos> "); 
+dbInit("docs_origin.db")
+# deal with ellipses (i.e. ...) confounding with periods
+docs <- tm_map(docs, toString, "\\.[\\.]+", "\\."); dbInit("docs_origin.db")
+# treat remaining punctuations as individual words
+docs <- tm_map(docs, toString, "\\,", " \\, "); dbInit("docs_origin.db")
+docs <- tm_map(docs, toString, "\\.", " \\. "); dbInit("docs_origin.db")
+docs <- tm_map(docs, toString, "\\?", " \\? "); dbInit("docs_origin.db")
+docs <- tm_map(docs, toString, "\\!", " \\! "); dbInit("docs_origin.db")
+docs <- tm_map(docs, toString, "\\:", " \\: "); dbInit("docs_origin.db")
+# remove single letters except "a" and "i"
+docs <- tm_map(docs, toString, " [b-hj-z] |^[b-hj-z] | [b-hj-z]$", " "); 
+dbInit("docs_origin.db")
+# remove whitespace
+docs <- tm_map(docs, stripWhitespace); dbInit("docs_origin.db")
+# write corpus to folder
+cname <- "../clean/"
+if(!dir.exists(cname)) {dir.create(cname)}
+writeCorpus(docs, path = cname, filenames = meta(docs, "id"))
+```
+
+```{r cleaned corpus, message=FALSE}
+# load cleaned dataset
+library(tm)
+library(filehash)
+cname <- "../clean/"
+docs <- PCorpus(DirSource(cname, encoding="UTF-8", mode="text"), 
+                readerControl=list(language="en"),
+                dbControl = list(dbName = "docs_clean.db", dbType = "DB1"))
+# view transformed content
+viewDocs(docs, 2, 5) # news example
+```
+
+It is important to take an overview of the text data before applying it to build our text prediction model. A exploratory table of words and vocabularies are shown below. It is obvious to see that we have over 100 million words in our original complete dataset, which is really a huge amount of data. Total number of words in each genre of the documents (blog, news and tweet) are comparable to each other, while the corresponding number of lines are vastly different. Type/token ratios (TTR), also vocabulary/words ratio, are all around one percent, with TTR for tweets slightly higher. TTR and the diversity measure are two ways of measuring the complexity of each genre. Since the content of tweets is less restricted, thus it is consistent with the result of higher TTR and diversity.
+
+```{r eda, message=FALSE, results='asis'}
+library(tau)
+library(xtable)
+ngram <- function(corpus, n) {
+      textcnt(corpus, method = "string", n = n, split = "[ ]+", decreasing = TRUE)
+}
+# lines in corpus
+line.blg <- length(as.character(docs[[1]][[1]]))
+line.new <- length(as.character(docs[[2]][[1]]))
+line.twt <- length(as.character(docs[[3]][[1]]))
+total.line <- c(line.blg, line.new, line.twt)
+# analysis of words in corpus
+word.blg <- ngram(docs[[1]][[1]], 1)
+word.blg <- data.frame(words = names(word.blg), counts = unclass(word.blg))
+word.new <- ngram(docs[[2]][[1]], 1)
+word.new <- data.frame(words = names(word.new), counts = unclass(word.new))
+word.twt <- ngram(docs[[3]][[1]], 1)
+word.twt <- data.frame(words = names(word.twt), counts = unclass(word.twt))
+unique.word <- c(dim(word.blg)[1], dim(word.new)[1], dim(word.twt)[1])
+total.word <- c(sum(word.blg$counts), sum(word.new$counts), sum(word.twt$counts))
+summaryCorpus <- data.frame(Words = total.word, Lines = total.line,
+                            Vocabulary = unique.word, 
+                            typeTokenRatio = unique.word / total.word,
+                            Diversity = unique.word / sqrt(2 * total.word))
+row.names(summaryCorpus) <- c("Blogs", "News", "Tweets")
+print(xtable(summaryCorpus, digits = 4), comment=FALSE)
+```
+
+```{r rm1, message=FALSE, echo=FALSE}
+rm(list = ls())
+```
+
+## Data splitting
+
+Before developing models, we first split the original dataset into training (60%), testing (20%) and an additional development testset ( __devset__ 20%). Individual entries in the documents are randomly permuted before splitting. We word further on the training set to develop our word prediction model.
+
+```{r datasplit, message=FALSE, eval=FALSE, echo=FALSE}
+# load cleaned dataset
+cname <- "../clean/"
+docs <- PCorpus(DirSource(cname, encoding="UTF-8", mode="text"), 
+                readerControl=list(language="en"),
+                dbControl = list(dbName = "docs_clean.db", dbType = "DB1"))
+# split into train, devtest and test sets with random order
+set.seed(62433)
+# permute all blogs with random order
+blogs.size <- length(docs[[1]]$content)
+blogs.perm <- sample(docs[[1]]$content, blogs.size)
+# determine split weight
+num.train <- round(0.6*blogs.size)
+num.test  <- round(0.2*blogs.size)
+# split data to different data set
+blogs.train  <- blogs.perm[1:num.train]
+blogs.test   <- blogs.perm[(num.train+1):(num.train+num.test)] # must be in parenthesis
+blogs.devset <- blogs.perm[(num.train+num.test+1):blogs.size]
+# write to folder
+if(!dir.exists("../training/")) dir.create("../training/")
+write(blogs.train, file = "../training/blogsTrain.txt")
+if(!dir.exists("../devset/")) dir.create("../devset/")
+write(blogs.devset, file = "../devset/blogsDevset.txt")
+if(!dir.exists("../testing/")) dir.create("../testing/")
+write(blogs.test, file = "../testing/blogsTest.txt")
+
+# permute all news with random order
+news.size <- length(docs[[2]]$content)
+news.perm <- sample(docs[[2]]$content, news.size)
+# determine split weight
+num.train <- round(0.6*news.size)
+num.test  <- round(0.2*news.size)
+# split data to different data set
+news.train  <- news.perm[1:num.train]
+news.test   <- news.perm[(num.train+1):(num.train+num.test)]
+news.devset <- news.perm[(num.train+num.test+1):news.size]
+# write to folder
+if(!dir.exists("../training/")) dir.create("../training/")
+write(news.train, file = "../training/newsTrain.txt")
+if(!dir.exists("../devset/")) dir.create("../devset/")
+write(news.devset, file = "../devset/newsDevset.txt")
+if(!dir.exists("../testing/")) dir.create("../testing/")
+write(news.test, file = "../testing/newsTest.txt")
+
+# permute all tweets with random order
+tweet.size <- length(docs[[3]]$content)
+tweet.perm <- sample(docs[[3]]$content, tweet.size)
+# determine split weight
+num.train <- round(0.6*tweet.size)
+num.test  <- round(0.2*tweet.size)
+# split data to different data set
+tweet.train  <- tweet.perm[1:num.train]
+tweet.test   <- tweet.perm[(num.train+1):(num.train+num.test)]
+tweet.devset <- tweet.perm[(num.train+num.test+1):tweet.size]
+# write to folder
+if(!dir.exists("../training/")) dir.create("../training/")
+write(tweet.train, file = "../training/twitterTrain.txt")
+if(!dir.exists("../devset/")) dir.create("../devset/")
+write(tweet.devset, file = "../devset/twitterDevset.txt")
+if(!dir.exists("../testing/")) dir.create("../testing/")
+write(tweet.test, file = "../testing/twitterTest.txt")
+```
+
+```{r rm2, message=FALSE, echo=FALSE}
+rm(list = ls())
+```
+
+## Generating n-grams
+
+There are several ways to generate n-grams for our model prediction, including _ngram_ package, _textcnt_ function in _tau_ package and _rweka_. The _tm_ package supplies the most convenient method, given its built-in __TermDocumentMatrix__ function. With customized tokenizer, one can essentially construct ngrams to any order. Unfortunately, the __TermDocumentMatrix__ becomes extremely slow with massive dataset, prohibiting the practical usage of this method. Here, for the initial process of developing our model, we choose to use a pretty small dataset, with only 5% of the training data. Example code of creating unigrams is shown below. We also generate bigrams and trigrams in a similar way.
+
+```{r load-train, eval=FALSE, echo=FALSE}
+# load training set
+dirtrain <- "../training/"
+docs.train <- PCorpus(DirSource(dirtrain, encoding="UTF-8", mode="text"), 
+                      readerControl=list(language="en"), 
+                      dbControl = list(dbName = "docs_train.db", dbType = "DB1"))
+list.train <- list('blogs' = docs.train[[1]][[1]],
+                   'news'  = docs.train[[2]][[1]],
+                   'tweet' = docs.train[[3]][[1]])
+```
+
+```{r ngram-fn, eval=FALSE}
+# customized function to create N-Grams
+library(tau)
+ngram <- function(corp, n) {textcnt(corp, method = "string",n=as.integer(n),
+             split = "[[:space:][:digit:]]+",decreasing=T)}
+```
+
+```{r unigram, eval=FALSE}
+unigram <- ngram(list.train, 1)
+unigram.wf <- data.frame(words = names(unigram), freq = unclass(unigram),
+                         row.names = NULL, stringsAsFactors = FALSE)
+# clean abnormal words in unigram
+# too long and rare words
+lnword <- nchar(unigram.wf$words) > 20
+unigram.wf <- unigram.wf[!lnword, ]
+# words as <num>, <eos>, <url>, <email>
+spword <- grepl("<(.*)+>", unigram.wf$words)
+unigram.wf <- unigram.wf[!spword, ]
+# long duplicate pattern, e.g. aaahhhhhh, ahahah, loooook
+# grep of this pattern is hard to deal with long word string
+dpword <- grepl("([a-z]+)+\\1{2,}", unigram.wf$words)
+unigram.wf <- unigram.wf[!dpword, ]
+# words start with apostrophe, e.g. 'stoke
+apword <- grepl("^\\'", unigram.wf$words)
+unigram.wf <- unigram.wf[!apword, ]
+# deal with concatenate sign (i.e. -), all should be removed except concatenated words
+cnword <- grepl("^([a-z]+-)+[a-z]+$", unigram.wf$words)
+cnsign <- grepl("-", unigram.wf$words)
+unigram.wf <- unigram.wf[!(cnsign & !cnword), ]
+# write to folder
+if(!dir.exists("ngram/")) dir.create("ngram/")
+write.csv(unigram.wf, "ngram/unigram-wf.csv", row.names = FALSE)
+# build frequency of frequency table
+unigram.fft <- data.frame(table(unigram.wf$freq), 
+                          row.names = NULL, stringsAsFactors = FALSE)
+colnames(unigram.fft) <- c("freq", "freq.freq")
+write.csv(unigram.fft, "ngram/unigram-fft.csv", row.names = FALSE)
+rm(unigram, unigram.wf, unigram.fft)
+```
+
+```{r bigram-clean-fn, eval=FALSE, echo=FALSE}
+BigramClean <- function(bigram.wf) {
+# clear abnormal words in bigram model
+# find bigram with too-long words
+lnword <- sapply(1:nrow(bigram.wf), function(i) {
+      biword <- bigram.wf$words[i]; biword.list <- strsplit(biword, split = " ");
+      biword.list <- unlist(biword.list); max(nchar(biword.list)) > 20})
+bigram.wf <- bigram.wf[!lnword, ]
+# bigrams with <num>, <eos>, <url>, <email>
+spword <- grepl("<(.*)+>", bigram.wf$words)
+bigram.wf <- bigram.wf[!spword, ]
+# long duplicate pattern, e.g. aaahhhhhh, ahahah, loooook
+# grep of this pattern is hard to deal with long word string
+dpword <- grepl("([a-z]+)+\\1{2,}", bigram.wf$words)
+bigram.wf <- bigram.wf[!dpword, ]
+# words start with apostrophe, e.g. 'stoke
+apword <- grepl("^\\'|[[:space:]]\\'", bigram.wf$words)
+bigram.wf <- bigram.wf[!apword, ]
+# deal with concatenate sign (i.e. -), all should be removed except concatenated words
+cnword <- grepl("^([a-z]+-)+[a-z]+$", bigram.wf$words)
+cnsign <- grepl("-", bigram.wf$words)
+bigram.wf <- bigram.wf[!(cnsign & !cnword), ]
+# more than one punctuation in ngram
+mpunct <- grepl("[[:punct:]][[:space:]][[:punct:]]", bigram.wf$words)
+bigram.wf <- bigram.wf[!mpunct, ]
+return(bigram.wf)
+}
+```
+
+```{r bigram, eval=FALSE, echo=FALSE}
+# size of higer-order ngrams are much larger compared with unigrams
+# the strategy is to sequentially process chunks of a large corpus 
+# to deal with the limitation of ram
+library(dplyr)
+nline <- 10000
+bigram.wf <- data.frame(words = character(), freq = integer(),
+                        stringsAsFactors = FALSE)
+if(!dir.exists("tmp/")) dir.create("tmp/")
+for(list.name in names(list.train)) {
+      corp <- list.train[[list.name]]
+      nstep <- trunc(length(corp) / nline)
+      print(paste("Iteration", list.name, "1 of", nstep))
+      remain_line <- length(corp) - nstep * nline
+      chunk <- corp[1:remain_line]
+      bigram <- ngram(chunk, 2)
+      tmpbigram.wf <- data.frame(words = names(bigram), freq = unclass(bigram),
+                                 stringsAsFactors = FALSE)
+      tmpbigram.wf <- BigramClean(tmpbigram.wf)
+      fname <- paste0("bigram-wf-", list.name, "1.csv")
+      write.csv(tmpbigram.wf, paste0("tmp/",fname))
+      bigram.wf <- rbind(bigram.wf, tmpbigram.wf)
+      bigram.wf <- aggregate(bigram.wf$freq, list(bigram.wf$words), sum)
+      names(bigram.wf) <- c("words", "freq")
+      corp <- corp[-(1:remain_line)]
+      
+      for(i in 1:(nstep-1)) {
+            print(paste("Iteration", list.name, (i+1), "of", nstep))
+            chunk <- corp[1:nline]
+            bigram <- ngram(chunk, 2)
+            tmpbigram.wf <- data.frame(words = names(bigram), freq = unclass(bigram),
+                                       stringsAsFactors = FALSE)
+            tmpbigram.wf <- BigramClean(tmpbigram.wf)
+            fname <- paste0("bigram-wf-", list.name, (i+1), ".csv")
+            write.csv(tmpbigram.wf, paste0("tmp/", fname))
+            bigram.wf <- rbind(bigram.wf, tmpbigram.wf) 
+            bigram.wf <- aggregate(bigram.wf$freq, list(bigram.wf$words), sum)
+            names(bigram.wf) <- c("words", "freq")
+            corp <- corp[-(1:nline)]
+      }
+}
+# write to folder
+if(!dir.exists("ngram/")) dir.create("ngram/")
+write.csv(bigram.wf, "ngram/bigram-wf.csv", row.names = FALSE)
+# build frequency of frequency table
+bigram.fft <- data.frame(table(bigram.wf$freq), 
+                         row.names = NULL, stringsAsFactors = FALSE)
+colnames(bigram.fft) <- c("freq", "freq.freq")
+write.csv(bigram.fft, "ngram/bigram-fft.csv", row.names = FALSE)
+rm(bigram.wf, bigram.fft)
+```
+
+```{r bigram, message=FALSE, eval=FALSE, echo=FALSE}
+# RWeka tokenizer will automatically remove puncuations with in sentences and words
+# thus disgarded, here use NLP package tokenizer
+BigramTokenizer <- function(x) 
+      unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+bigram.tdm <- TermDocumentMatrix(docs.trial, control = list(tokenize = BigramTokenizer))
+bigram.freq <- sort(rowSums(as.matrix(bigram.tdm)), decreasing = TRUE)
+bigram.wf <- data.frame(words = names(bigram.freq), freq = bigram.freq, 
+                        row.names = NULL, stringsAsFactors = FALSE)
+# clear abnormal words in bigram model
+# remove too-long words except concatenated words, e.g. state-of-the-art
+cnword <- grepl("^([a-z]+-)+[a-z]+$", bigram.wf$words)
+# find bigram with too-long words
+lnword <- sapply(1:nrow(bigram.wf), function(i) {
+      biword <- bigram.wf$words[i]; biword.list <- strsplit(biword, split = " ");
+      biword.list <- unlist(biword.list); max(nchar(biword.list)) > 12})
+lnword <- lnword & bigram.freq <= 2 & !cnword
+bigram.wf <- bigram.wf[!lnword, ]
+# bigrams with <num>, <eos>, <url>, <email>
+spword <- grepl("<(.*)+>", bigram.wf$words)
+bigram.wf <- bigram.wf[!spword, ]
+# long duplicate pattern, e.g. aaahhhhhh, ahahah, loooook
+# grep of this pattern is hard to deal with long word string
+dpword <- grepl("([a-z]+)+\\1{2,}", bigram.wf$words)
+bigram.wf <- bigram.wf[!dpword, ]
+# words start with apostrophe, e.g. 'stoke
+apword <- grepl("^\\'|[[:space:]]\\'", bigram.wf$words)
+bigram.wf <- bigram.wf[!apword, ]
+# deal with concatenate sign (i.e. -), all should be removed except concatenated words
+cnword <- grepl("^([a-z]+-)+[a-z]+$", bigram.wf$words)
+cnsign <- grepl("-", bigram.wf$words)
+bigram.wf <- bigram.wf[!(cnsign & !cnword), ]
+# more than one punctuation in ngram
+mpunct <- grepl("[[:punct:]][[:space:]][[:punct:]]", bigram.wf$words)
+bigram.wf <- bigram.wf[!mpunct, ]
+# write to folder
+if(!dir.exists("../trial-ngram/")) dir.create("../trial-ngram/")
+write.csv(bigram.wf, "../trial-ngram/bigram-wf.csv", row.names = FALSE)
+# build frequency of frequency table
+bigram.fft <- data.frame(table(bigram.wf$freq), 
+                         row.names = NULL, stringsAsFactors = FALSE)
+colnames(bigram.fft) <- c("freq", "freq.freq")
+write.csv(bigram.fft, "../trial-ngram/bigram-fft.csv", row.names = FALSE)
+```
+
+```{r trigram, message=FALSE, eval=FALSE, echo=FALSE}
+TrigramTokenizer <- function(x) 
+      unlist(lapply(ngrams(words(x), 3), paste, collapse = " "), use.names = FALSE)
+trigram.tdm <- TermDocumentMatrix(docs.trial, control = list(tokenize = TrigramTokenizer))
+trigram.freq <- sort(rowSums(as.matrix(trigram.tdm)), decreasing = TRUE)
+trigram.wf <- data.frame(words = names(trigram.freq), freq = trigram.freq, 
+                         row.names = NULL, stringsAsFactors = FALSE)
+# clear abnormal words in bigram model
+# remove too-long words except concatenated words, e.g. state-of-the-art
+cnword <- grepl("^([a-z]+-)+[a-z]+$", trigram.wf$words)
+# find bigram with too-long words
+lnword <- sapply(1:nrow(trigram.wf), function(i) {
+      triword <- trigram.wf$words[i]; triword.list <- strsplit(triword, split = " ");
+      triword.list <- unlist(triword.list); max(nchar(triword.list)) > 12})
+lnword <- lnword & trigram.freq <= 2 & !cnword
+trigram.wf <- trigram.wf[!lnword, ]
+# bigrams with <num>, <eos>, <url>, <email>
+spword <- grepl("<(.*)+>", trigram.wf$words)
+trigram.wf <- trigram.wf[!spword, ]
+# long duplicate pattern, e.g. aaahhhhhh, ahahah, loooook
+# grep of this pattern is hard to deal with long word string
+dpword <- grepl("([a-z]+)+\\1{2,}", trigram.wf$words)
+trigram.wf <- trigram.wf[!dpword, ]
+# words start with apostrophe, e.g. 'stoke
+apword <- grepl("^\\'|[[:space:]]\\'", trigram.wf$words)
+trigram.wf <- trigram.wf[!apword, ]
+# deal with concatenate sign (i.e. -), all should be removed except concatenated words
+cnword <- grepl("^([a-z]+-)+[a-z]+$", trigram.wf$words)
+cnsign <- grepl("-", trigram.wf$words)
+trigram.wf <- trigram.wf[!(cnsign & !cnword), ]
+# more than one punctuation in ngram
+mpunct <- grepl("[[:punct:]][[:space:]][[:punct:]]", trigram.wf$words)
+trigram.wf <- trigram.wf[!mpunct, ]
+# write to folder
+if(!dir.exists("../trial-ngram/")) dir.create("../trial-ngram/")
+write.csv(trigram.wf, "../trial-ngram/trigram-wf.csv", row.names = FALSE)
+# build frequency of frequency table
+trigram.fft <- data.frame(table(trigram.wf$freq), 
+                          row.names = NULL, stringsAsFactors = FALSE)
+colnames(trigram.fft) <- c("freq", "freq.freq")
+write.csv(trigram.fft, "../trial-ngram/trigram-fft.csv", row.names = FALSE)
+```
+
+Although our initial trial dataset composed of only a tiny portion of the original dataset, it turns there is already approximately 100,000 distinct words in our trial set. The frequency of words decays exponentially, which means vast majority of the words simply appears only once (singleton). The proportion of singletons increases as we calculate higher order ngrams. For the first trial of the modeling, we choose to keep all the ngrams given the idea that all the sparse ngrams supply clues to the probability of unseen ngrams. This is the benchmark for the development of Good-Turing smoothing that is used later in our first model. The following figure indicates another interesting property of the frequency distribution, that is the frequency of frequency ($N_c$) decreases algebraically with frequency $c$. Here, $N_c$ means the number of ngrams that occurs exactly $c$ times. This algebraic relation serves as the ground to approximate the zero $N_c$ in the data with a linear regression in the log space.
+
+```{r plot-ff, message=FALSE, fig.height=2.5, echo=FALSE}
+dirtrialngram <- "../trial-ngram/"
+unigram.fft <- read.csv(file = paste(dirtrialngram, "unigram-fft.csv", sep = ""))
+bigram.fft  <- read.csv(file = paste(dirtrialngram, "bigram-fft.csv" , sep = ""))
+trigram.fft <- read.csv(file = paste(dirtrialngram, "trigram-fft.csv", sep = ""))
+# scatter plot
+library(scales)
+par(mfrow = c(1,3))
+scatter.smooth(log10(unigram.fft$freq), log10(unigram.fft$freq.freq), 
+               xlab = "Frequency", ylab = "Frequency of frequency", main = "Unigram",
+               col = alpha("blue", 0.1), xlim = c(0,4), ylim = c(0,6))
+scatter.smooth(log10(bigram.fft$freq), log10(bigram.fft$freq.freq), 
+               xlab = "Frequency", ylab = "Frequency of frequency", main = "Bigram",
+               col = alpha("blue", 0.1), xlim = c(0,4), ylim = c(0,6))
+scatter.smooth(log10(trigram.fft$freq), log10(trigram.fft$freq.freq), 
+               xlab = "Frequency", ylab = "Frequency of frequency", main = "Trigram",
+               col = alpha("blue", 0.1), xlim = c(0,4), ylim = c(0,6))
+```
+
+## Good-Turing smoothing
+
+The idea of smoothing comes from the reality that all the real text data is sparse. For ngrams that appeared sufficient number of times in the training set, one can obtain a fair estimation of the probability based on maximum likelihood estimate (MLE). However, for ngrams with zero or negligible probability, MLE can only give poor estimates. The intuition of Good-Turing smoothing is to use the count of singletons to help estimate the count of ngrams that never appeared. The Good-Turing discount $d_c$ is defined as the ratio of the smoothed count with respect to its original count $d_c=c^*/c$. The left-over probability (or missing mass) for things with zero count now is given by $P^*_{GT}(N_0)=N_1/N$. The table below shows the results of discounts $d_c$ for all ngrams that we built in our first model. One can observe that ngrams with lowest frequency got more discount, while the discount becomes smaller as frequency increases.
+
+```{r smoothing, message=FALSE, results='asis'}
+dirtrialngram <- "../trial-ngram/"
+unigram.fft <- read.csv(file = paste(dirtrialngram, "unigram-fft.csv", sep = ""))
+bigram.fft  <- read.csv(file = paste(dirtrialngram, "bigram-fft.csv" , sep = ""))
+trigram.fft <- read.csv(file = paste(dirtrialngram, "trigram-fft.csv", sep = ""))
+# implement Simple Good-Turing (smoothing zero Nc)
+# a linear regression fit log(Nc) ~ log(C) is omitted given enough data
+# discounted estimates used for counts c <= (k=5)
+# custom function extended ngram.fft table with discount added
+createNgramFftExtended <- function(ngram.fft, k=5) {
+      ngram.fft$discount <- rep(1, nrow(ngram.fft))
+      # calculate discount 
+      k = 5
+      finalN <- ngram.fft[k+1,2]
+      firstN <- ngram.fft[1,2]
+      for(i in 1:k) {
+            currN <- ngram.fft[i,2]
+            nextN <- ngram.fft[i+1,2]
+            currd <- (i+1.0)/i*(nextN/currN) - (k+1)*(finalN/firstN)
+            currd <- currd/(1-(k+1)*(finalN/firstN))
+            ngram.fft$discount[i] <- currd
+      }
+      ngram.fft
+}
+# apply to uni-, bi- and tri-grams
+unigram.fft <- createNgramFftExtended(unigram.fft)
+bigram.fft  <- createNgramFftExtended(bigram.fft)
+trigram.fft <- createNgramFftExtended(trigram.fft)
+write.csv(unigram.fft, "../trial-ngram/unigram-fft.csv", row.names = FALSE)
+write.csv(bigram.fft,  "../trial-ngram/bigram-fft.csv",  row.names = FALSE)
+write.csv(trigram.fft, "../trial-ngram/trigram-fft.csv", row.names = FALSE)
+# print xtable of discount
+library(xtable)
+tableGT <- data.frame(freq=c(1:6), uni.discount=unigram.fft[1:6,3], 
+                        bi.discount=bigram.fft[1:6,3], tri.discount=trigram.fft[1:6,3])
+print(xtable(tableGT), comment=FALSE)
+```
+
+## Prediction with Katz back-off
+
+The Good-Turing discount is usually combined with the Katz back-off method to give better prediction of words. For Good-Turing smoothing, left-over probability mass is assigned to all unseen events. Among those unseen events, the probability mass are assumed to be evenly distributed. As one step further, Katz back-off suggests a better way of distributing the probability mass among unseen events, by relying on information of lower-order ngrams.
+
+```{r predict-customfn, message=FALSE, echo=FALSE}
+probLeftover <- function(frequency, discount) {
+#
+# calculate left-over probability
+#
+      freq.tot <- sum(frequency)
+      freq.eff <- sum(frequency * discount)
+      return(1-freq.eff/freq.tot)
+}
+
+cleanInput <- function(input, maxN = 2) {
+#
+# preprocessing user input string
+#      
+            input <- tolower(input)
+            input <- gsub("[^[:alnum:][:space:]',.?!:-]", "", input)
+            input <- gsub("\\.", " \\. ", input)
+            input <- gsub("\\,", " \\, ", input)
+            input <- gsub("\\!", " \\! ", input)
+            input <- gsub("\\?", " \\? ", input)
+            input <- gsub("\\:", " \\: ", input)
+            input <- gsub("^[[:space:]]+", "", input)
+            input <- gsub("[[:space:]]+", " ", input)
+# tokenize
+            words <- unlist(strsplit(input, split = " "))
+# output bigram if sufficient words
+# otherwise unigram
+            if(length(words) < maxN) {
+                  isTrigram = FALSE 
+                  return(list(input, isTrigram))
+            }else{
+                  isTrigram = TRUE
+                  bgn <- length(words)-maxN+1
+                  end <- length(words)
+                  tempwords <- words[bgn:end]
+                  return(list(paste(tempwords, collapse = " "), isTrigram))
+            }
+}
+
+probTrigramPredictor <- function(input, predict) {
+#
+# with bigram input plus a predict word, output the probability
+# estimator from Katz back-off method (together with Good-Turing discounting)
+#
+# e.g. Input: want to
+#      predict: sleep
+#      output: 0.04536
+#      
+      trigram.in <- subset(trigram.wf, bigram == input)
+      if(nrow(trigram.in) > 0) {
+            trigram.record <- subset(trigram.in, lastword == predict)
+            if(nrow(trigram.record) > 0) {
+                  # trigram found in model
+                  freq.tot <- sum(trigram.in$freq)
+                  freq.eff <- trigram.record$freq * trigram.record$discount
+                  prob.final <- freq.eff / freq.tot
+            } else {
+                  # trigram not found -> check bigram
+                  input.uni <- gsub(".* ", "", input)
+                  # get the leftover probability 'beta'
+                  beta <- subset(trigram.beta, bigram == input)$probLeftover
+                  bigram.in <- subset(bigram.wf, unigram == input.uni)
+                  bigram.record <- subset(bigram.in, lastword == predict)
+                  if(nrow(bigram.record) >0 ) {
+                        # bigram found in model
+                        # considered only when lastword not found in trigram
+                        bigram.in.remain <- bigram.in[!(bigram.in$lastword %in% trigram.in$lastword),]
+                        freq.tot <- sum(bigram.in$freq)
+                        freq.eff <- sum(bigram.in.remain$freq*bigram.in.remain$discount)
+                        alpha <- beta / (freq.eff / freq.tot)
+                        freq.eff.record <- bigram.record$freq * bigram.record$discount
+                        prob.final <- alpha * (freq.eff.record / freq.tot)
+                  } else {
+                        # only hope in unigram !
+                        unigram.in <- unigram.wf
+                        unigram.record <- subset(unigram.wf, words == predict)
+                        if(nrow(unigram.record) > 0 ) {
+                              # found in unigram
+                              unigram.in.remain <- unigram.in[!(unigram.in$words %in% trigram.in$lastword),]
+                              freq.tot <- sum(unigram.in$freq)
+                              freq.eff <- sum(unigram.in.remain$freq*unigram.in.remain$discount)
+                              alpha <- beta / (freq.eff / freq.tot)
+                              freq.eff.record <- unigram.record$freq * unigram.record$discount
+                              prob.final <- alpha * (freq.eff.record / freq.tot)
+                        } else {
+                              stop(sprintf("predictor [%s] not found in trigram model", predict))
+                        }
+                  }
+            }
+            # return final probability
+            prob.final
+      } else {
+            sprintf("input [%s] not found in trigram model.", input)
+            input.uni <- gsub(".* ", "", input)
+            probBigramPredictor(input.uni, predict)
+      }
+}
+
+probBigramPredictor <- function(input, predict) {
+#      
+# single word input plus a predict word, output the probability
+# katz back-off with good-turing discounting
+#      
+      bigram.in <- subset(bigram.wf, unigram == input)
+      if(nrow(bigram.in) > 0) {
+            bigram.record <- subset(bigram.in, lastword == predict)
+            if(nrow(bigram.record) > 0) {
+                  # find bigram record
+                  freq.tot <- sum(bigram.in$freq)
+                  freq.eff <- bigram.record$freq * bigram.record$discount
+                  prob.final <- freq.eff / freq.tot
+            } else {
+                  # not find bigram record, go to unigram
+                  beta <- subset(bigram.beta, unigram == input)$probLeftover
+                  unigram.in <- unigram.wf
+                  unigram.record <- subset(unigram.wf, words == predict)
+                  if(nrow(unigram.record) > 0) {
+                        # found in unigram
+                        unigram.in.remain <- unigram.in[!(unigram.in$words %in% bigram.in$lastwords),]
+                        freq.tot <- sum(unigram.in$freq)
+                        freq.eff <- sum(unigram.in.remain$freq * unigram.in.remain$discount)
+                        alpha <- beta / (freq.eff / freq.tot)
+                        freq.eff.record <- unigram.record$freq * unigram.record$discount
+                        prob.final <- alpha * (freq.eff.record / freq.tot)
+                  } else {
+                        stop(sprintf("predictor [%s] not found in bigram model", predict))
+                  }
+            }
+            prob.final
+      } else {
+            sprintf("input [%s] not found in bigram model.", input)
+            probUnigramPredictor(predict)
+      }
+}
+
+probUnigramPredictor <- function(predict) {
+#      
+# output probability of given predict word with unigram data
+#
+      unigram.in <- unigram.wf
+      unigram.record <- subset(unigram.wf, words == predict)
+      if(nrow(unigram.record) > 0) {
+            freq.tot <- sum(unigram.in$freq)
+            freq.eff <- unigram.record$freq * unigram.record$discount
+            prob.final <- freq.eff / freq.tot
+      } else {
+            # any predicted word should be found in the training corpus
+            # otherwise no way to predict
+            stop(sprintf("predictor [%s] not found in unigram model", predict))
+      }
+      prob.final
+}
+```
+
+Since our back-off algorithm involves calculating probability of suggested output word, we need to figure out what to put into the pool of suggested words and then select from them with highest probabilities. An ideal case is to try all the individual word in the whole vocabulary in our training set, which soon turns out to be a formidable task. Here, instead, we first use the naive back-off algorithm to select a pool of 50 words from the training set and then proceed with Katz back-off to find the final six suggestions of the next word. In detail, we select 20, 20 and 10 words with top effective probabilities from trigrams, bigrams and unigrams respectively. A few randomly picked examples of the prediction is given.
+
+```{r predict, message=FALSE, echo=FALSE}
+# prepare bigram and trigram word frame for future manipulation
+#
+library(dplyr)
+trigram.wf <- read.csv("../trial-ngram/trigram-wf.csv", stringsAsFactors = FALSE)
+trigram.fft <- read.csv("../trial-ngram/trigram-fft.csv")
+trigram.wf$bigram <- gsub(" [^ ]+$", "", trigram.wf$words)
+trigram.wf$unigram <- gsub(".* ", "", trigram.wf$bigram)
+trigram.wf$lastword <- gsub(".* ", "", trigram.wf$words)
+trigram.wf <- merge(trigram.wf, trigram.fft[,c(1,3)], by = "freq")
+# trigram leftover probability
+trigram.beta <- trigram.wf %>% group_by(bigram) %>%
+      summarise(probLeftover = probLeftover(freq, discount)) %>%
+      as.data.frame()
+bigram.wf <- read.csv("../trial-ngram/bigram-wf.csv", stringsAsFactors = FALSE)
+bigram.fft <- read.csv("../trial-ngram/bigram-fft.csv")
+bigram.wf$unigram <- gsub(" .*", "", bigram.wf$words)
+bigram.wf$lastword <- gsub(".* ", "", bigram.wf$words)
+bigram.wf <- merge(bigram.wf, bigram.fft[,c(1,3)], by = "freq")
+# bigram leftover probability
+bigram.beta <- bigram.wf %>% group_by(unigram) %>%
+      summarise(probLeftover = probLeftover(freq, discount)) %>%
+      as.data.frame()
+unigram.wf <- read.csv("../trial-ngram/unigram-wf.csv", stringsAsFactors = FALSE)
+unigram.fft <- read.csv("../trial-ngram/unigram-fft.csv")
+unigram.wf <- merge(unigram.wf, unigram.fft[,c(1,3)], by = "freq")
+
+# simple version of prediction function
+predict.unigram <- arrange(unigram.wf, desc(freq * discount)) %>%
+      select(words) %>% head(10)
+predict.unigram <- predict.unigram$words
+nextWordPrediction <- function(rawinput, numRecommend = 6) {
+      input.list <- cleanInput(rawinput)
+      input <- input.list[[1]]
+      isTrigram <- input.list[[2]]
+      if(isTrigram == TRUE) {
+            # pre-selection of 20 words as candidate predict word
+            # bare Good-Turing discounted probabilities are used
+            trigram.in <- subset(trigram.wf, bigram == input)
+            predict.trigram <- arrange(trigram.in, desc(freq * discount)) %>%
+                  select(lastword) %>% head(10)
+            predict.trigram <- predict.trigram$lastword
+            input.uni <- gsub(".* ", "", input)
+            bigram.in <- subset(bigram.wf, unigram == input.uni)
+            predict.bigram <- arrange(bigram.in, desc(freq * discount)) %>%
+                  select(lastword) %>% head(10)
+            predict.bigram <- predict.bigram$lastword
+            predict.vector <- unique(c(predict.trigram, predict.bigram, predict.unigram))
+            # katz back-off for advanced search
+            prob.vec <- sapply(predict.vector, function(x) probTrigramPredictor(input, x))
+            prob.df <- data.frame(predictor = predict.vector, probability = prob.vec)
+            wordRecommend <- arrange(prob.df, desc(prob.vec)) %>% head(numRecommend) %>% t()
+      } else {
+            input.uni <- gsub(".* ", "", input)
+            bigram.in <- subset(bigram.wf, unigram == input.uni)
+            predict.bigram <- bigram.in$lastword
+            predict.vector <- unique(c(predict.bigram, predict.unigram))
+            # katz back-off
+            prob.vec <- sapply(predict.vector, function(x) probBigramPredictor(input.uni, x))
+            prob.df <- data.frame(predictor = predict.vector, probability = prob.vec)
+            wordRecommend <- arrange(prob.df, desc(prob.vec)) %>% head(numRecommend) %>% t()
+      }
+      # vector of suggested words with probability
+      as.character(wordRecommend[1,])
+}
+```
+
+```{r predict-eg, message=FALSE, results='asis'}
+library(xtable)
+print(xtable(nextWordPrediction("consider the following")), comment=FALSE)
+print(xtable(nextWordPrediction("this is made in")), comment=FALSE)
+print(xtable(nextWordPrediction("I'm running out of")), comment=FALSE)
+```
+
+## Further discussion and consideration
+
+It is kind of amazing that our model already gives some reasonable prediction of the next output word, given the small trial training dataset we used. There are still many future challenges. One of them is to __increase the training dataset__ to 60% (or higher) of the original text set to increase prediction accuracy. The subsequent issue with __scalability__ should be considered seriously. The __Katz back-off algorithm__ implemented here, though gives reasonable prediction of next words, is still pretty slow given the size of ngrams created. Improvement on the algorithm is desired. 
+
+One additional issue that might deserve to mention is related to a simple and involved example. Consider the occasion that, the first $(n-1)$ words from the input data is not found in any of the ngrams (for $n>1$). Then we have to go back to the case with unigrams and output a word with highest discounted effective probability, which is independent of any input words. This is definitely something unwanted. To get rid of the issue, an algorithm, which could further understand the intrinsic meaning (or __semantics__) of words or sentences is highly desired. Of course, a word that absent from the vocabulary of the training set can never be predicted, which is another limitation of our model.
+
+## References
+
+Jurafsky, D. & Martin, J.H. (2000). *Speech and language processing: An introduction to natural language processing, computational linguistics and speech recognition*. Englewood Cliffs, NJ: Prentice Hall.
+
+Gendron G R. *Natural Language Processing: A Model to Predict a Sequence of Words*. MODSIM World 2015, 2015, 2015 (13): 1-10.
+
+Thach-Ngoc TRAN [*Katz’s Backoff Model Implementation in R*](https://thachtranerc.wordpress.com/2016/04/12/katzs-backoff-model-implementation-in-r/).

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>N-Gram Text Prediction</title>
+
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="chrome=1">
+  <meta name="generator" content="pandoc" />
+
+
+
+
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+
+  <base target="_blank">
+
+  <script type="text/javascript">
+    var SLIDE_CONFIG = {
+      // Slide settings
+      settings: {
+                title: 'N-Gram Text Prediction',
+                        subtitle: 'with Good-Turing discount and Katz backoff',
+                useBuilds: true,
+        usePrettify: true,
+        enableSlideAreas: true,
+        enableTouch: true,
+                        favIcon: 'nlp-slide_files/logo.png',
+              },
+
+      // Author information
+      presenters: [
+            {
+        name:  'Wei Xu' ,
+        company: '',
+        gplus: '',
+        twitter: '',
+        www: '',
+        github: ''
+      },
+            ]
+    };
+  </script>
+
+  <link href="nlp-slide_files/ioslides-13.5.1/fonts/fonts.css" rel="stylesheet" />
+  <link href="nlp-slide_files/ioslides-13.5.1/theme/css/default.css" rel="stylesheet" />
+  <link href="nlp-slide_files/ioslides-13.5.1/theme/css/phone.css" rel="stylesheet" />
+  <script src="nlp-slide_files/ioslides-13.5.1/js/modernizr.custom.45394.js"></script>
+  <script src="nlp-slide_files/ioslides-13.5.1/js/prettify/prettify.js"></script>
+  <script src="nlp-slide_files/ioslides-13.5.1/js/prettify/lang-r.js"></script>
+  <script src="nlp-slide_files/ioslides-13.5.1/js/prettify/lang-yaml.js"></script>
+  <script src="nlp-slide_files/ioslides-13.5.1/js/hammer.js"></script>
+  <script src="nlp-slide_files/ioslides-13.5.1/js/slide-controller.js"></script>
+  <script src="nlp-slide_files/ioslides-13.5.1/js/slide-deck.js"></script>
+
+  <style type="text/css">
+
+    b, strong {
+      font-weight: bold;
+    }
+
+    em {
+      font-style: italic;
+    }
+
+    slides > slide {
+      -webkit-transition: all 0.4s ease-in-out;
+      -moz-transition: all 0.4s ease-in-out;
+      -o-transition: all 0.4s ease-in-out;
+      transition: all 0.4s ease-in-out;
+    }
+
+    .auto-fadein {
+      -webkit-transition: opacity 0.6s ease-in;
+      -webkit-transition-delay: 0.4s;
+      -moz-transition: opacity 0.6s ease-in 0.4s;
+      -o-transition: opacity 0.6s ease-in 0.4s;
+      transition: opacity 0.6s ease-in 0.4s;
+      opacity: 0;
+    }
+
+    slides > slide:not(.nobackground):before {
+      font-size: 12pt;
+      content: "";
+      position: absolute;
+      bottom: 20px;
+      left: 60px;
+      background: url(nlp-slide_files/logo.png) no-repeat 0 50%;
+      -webkit-background-size: 30px 30px;
+      -moz-background-size: 30px 30px;
+      -o-background-size: 30px 30px;
+      background-size: 30px 30px;
+      padding-left: 40px;
+      height: 30px;
+      line-height: 1.9;
+    }
+  </style>
+
+  <link rel="stylesheet" href="shiny-slides.css" type="text/css" />
+
+</head>
+
+<body style="opacity: 0">
+
+<slides>
+
+  <slide class="title-slide segue nobackground">
+        <aside class="gdbar"><img src="nlp-slide_files/logo.png"></aside>
+        <!-- The content of this hgroup is replaced programmatically through the slide_config.json. -->
+    <hgroup class="auto-fadein">
+      <h1 data-config-title><!-- populated from slide_config.json --></h1>
+      <h2 data-config-subtitle><!-- populated from slide_config.json --></h2>
+      <p data-config-presenter><!-- populated from slide_config.json --></p>
+            <p style="margin-top: 6px; margin-left: -2px;">April 1, 2017</p>
+          </hgroup>
+  </slide>
+
+<slide class=''><hgroup><h2>Natural Language Processing</h2></hgroup><article  id="natural-language-processing">
+
+<ul>
+<li>Sentiment Analysis</li>
+<li>Question Answering</li>
+<li>Dialogue Angents / Response Generation</li>
+<li>Machine Translation</li>
+<li><span style="color:red">
+Text Prection</span>
+
+<ul>
+<li>Markov assumption: individual words are correlated to neighbouring words</li>
+<li>Strength of correlation is calculated with probability of N-word sentenses (N-grams)</li>
+<li>Predict new word based on the previous (N-1) input words with corresponding N-grams</li>
+</ul></li>
+</ul>
+
+</article></slide><slide class=''><hgroup><h2>N-Gram Model</h2></hgroup><article  id="n-gram-model" class="columns-2">
+
+<table class = 'rmdtable'>
+<col width="11%" />
+<col width="11%" />
+<tr class="header">
+<th align="center">words</th>
+<th align="center">freq</th>
+</tr>
+<tr class="odd">
+<td align="center">the</td>
+<td align="center">142639</td>
+</tr>
+<tr class="even">
+<td align="center">and</td>
+<td align="center">76158</td>
+</tr>
+<tr class="odd">
+<td align="center">for</td>
+<td align="center">32797</td>
+</tr>
+<tr class="even">
+<td align="center">that</td>
+<td align="center">31584</td>
+</tr>
+<tr class="odd">
+<td align="center">you</td>
+<td align="center">28163</td>
+</tr>
+<tr class="even">
+<td align="center">with</td>
+<td align="center">21554</td>
+</tr>
+</table>
+
+<table class = 'rmdtable'>
+<col width="20%" />
+<col width="8%" />
+<tr class="header">
+<th align="center">words</th>
+<th align="center">freq</th>
+</tr>
+<tr class="odd">
+<td align="center">one of the</td>
+<td align="center">1061</td>
+</tr>
+<tr class="even">
+<td align="center">a lot of</td>
+<td align="center">919</td>
+</tr>
+<tr class="odd">
+<td align="center">. it was</td>
+<td align="center">738</td>
+</tr>
+<tr class="even">
+<td align="center">, and the</td>
+<td align="center">721</td>
+</tr>
+<tr class="odd">
+<td align="center">thanks for the</td>
+<td align="center">700</td>
+</tr>
+<tr class="even">
+<td align="center">, but i</td>
+<td align="center">699</td>
+</tr>
+</table>
+
+</article></slide><slide class=''><hgroup><h2>Missing N-Grams</h2></hgroup><article  id="missing-n-grams">
+
+<h3>Good-Turing discounting</h3>
+
+<h6>Use the count of singletons to help estimate the count of ngrams that never appeared.</h6>
+
+<pre >##   freq uni.discount bi.discount tri.discount
+## 1    1    0.3414291   0.2497815    0.1439759
+## 2    2    0.6572294   0.5811694    0.4902580
+## 3    3    0.7819079   0.7215757    0.6486284
+## 4    4    0.8327411   0.7743815    0.7350964
+## 5    5    0.8609135   0.8217875    0.7748720</pre>
+
+<h3>Katz backoff</h3>
+
+<h6>Katz back-off suggests a better way of distributing the probability mass among unseen events, by relying on information of lower-order ngrams.</h6>
+
+</article></slide><slide class=''><hgroup><h2>Shiny Application</h2></hgroup><article  id="shiny-application">
+
+<h3><a href='https://bolaik.shinyapps.io/n-gram_text_predictor/' title=''>Shiny app</a> online user interface</h3>
+
+<ul>
+<li>Type in phrase</li>
+<li>Choose backoff method: Naive backoff vs Katz backoff</li>
+<li>Probability barplot of selected words</li>
+</ul>
+
+<h3>Model performance</h3>
+
+<table class = 'rmdtable'>
+<tr class="header">
+<th align="left">model</th>
+<th align="left">top1_precision</th>
+<th align="left">top3_precision</th>
+<th align="left">avg_runtime</th>
+<th align="left">tot_memory</th>
+</tr>
+<tr class="odd">
+<td align="left">Katz backoff</td>
+<td align="left">10.81 %</td>
+<td align="left">15.06 %</td>
+<td align="left">700.91 msec</td>
+<td align="left">213.76 mb</td>
+</tr>
+</table></article></slide>
+
+
+  <slide class="backdrop"></slide>
+
+</slides>
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+<!-- map slide visiblity events into shiny -->
+<script>
+  (function() {
+    if (window.jQuery) {
+       window.jQuery(document).on('slideleave', function(e) {
+         window.jQuery(e.target).trigger('hidden');
+      });
+       window.jQuery(document).on('slideenter', function(e) {
+         window.jQuery(e.target).trigger('shown');
+      });
+    }
+  })();
+</script>
+
+</body>
+</html>
