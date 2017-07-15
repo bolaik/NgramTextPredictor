@@ -11,8 +11,8 @@ Coursera data science capstone project: R n-gram text predictor, shiny app
 
 ## Helpful links (keeps adding)
 
-- <https://github.com/bolaik/NLP-A-Model-to-Predict-Word-Sequences-jgendron>
-- <https://github.com/bolaik/Coursera-capstone-project-vikasgupta1812>
-- <https://github.com/bolaik/Capstone-Predict-Next-Word-momobo>
+- <https://github.com/jgendron/datasciencecoursera>
+- <https://github.com/vikasgupta1812/Coursera-capstone-project>
+- <https://github.com/momobo/Capstone_Dryrun>
 - <https://github.com/ThachNgocTran/KatzBackOffModelImplementationInR>
 
